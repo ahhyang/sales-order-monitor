@@ -1,4 +1,5 @@
 import "server-only";
+import { NextResponse } from "next/server";
 
 // Server-side client for the mock API. The access key lives in an env var and never reaches the browser.
 
@@ -48,4 +49,12 @@ export async function fetchUpstream<T>(path: string, query?: URLSearchParams): P
   } catch {
     throw new UpstreamError("Sales order service returned an invalid response.", 502);
   }
+}
+
+// Shared by the route handlers so every endpoint fails the same way: JSON `{ error }`, logged if it's on us.
+export function errorResponse(err: unknown, route: string): NextResponse {
+  const status = err instanceof UpstreamError ? err.status : 500;
+  const message = err instanceof UpstreamError ? err.message : "Unexpected server error.";
+  if (status >= 500) console.error(`[${route}]`, err);
+  return NextResponse.json({ error: message }, { status, headers: { "cache-control": "no-store" } });
 }

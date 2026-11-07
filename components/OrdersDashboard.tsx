@@ -15,6 +15,15 @@ import { Pagination } from "./Pagination";
 const SEARCH_DEBOUNCE_MS = 300;
 // Newest / largest first is the more useful default when a user first clicks these columns.
 const DESC_FIRST: SortField[] = ["CreatedDateTime1", "HAR_TotalSOAmount"];
+const MOBILE_SORTS = [
+  { value: "", label: "Order no. (default)" },
+  { value: "CreatedDateTime1:desc", label: "Newest first" },
+  { value: "CreatedDateTime1:asc", label: "Oldest first" },
+  { value: "HAR_TotalSOAmount:desc", label: "Amount: high to low" },
+  { value: "HAR_TotalSOAmount:asc", label: "Amount: low to high" },
+  { value: "SalesStatus:asc", label: "Status" },
+  { value: "InventSiteId:asc", label: "Branch" },
+];
 
 export function OrdersDashboard() {
   const pathname = usePathname();
@@ -140,7 +149,7 @@ export function OrdersDashboard() {
         </section>
 
         <section aria-labelledby="orders-heading" className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between px-4 pt-4">
+          <div className="flex items-center justify-between gap-3 px-4 pt-4">
             <h2 id="orders-heading" className="text-base font-semibold text-slate-900">Sales orders</h2>
             {shown && hasFilters && (
               <span className="text-xs text-slate-500">
@@ -148,6 +157,27 @@ export function OrdersDashboard() {
               </span>
             )}
           </div>
+
+          {/* Column headers are hidden on phones, so sorting gets its own control there */}
+          <label className="flex items-center gap-2 px-4 pt-3 text-xs font-medium text-slate-600 md:hidden">
+            Sort by
+            <select
+              value={sort ? `${sort}:${order}` : ""}
+              onChange={(e) => {
+                const [field, dir] = e.target.value.split(":");
+                update({ sort: field || null, order: dir || null });
+              }}
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-slate-900"
+            >
+              {MOBILE_SORTS.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+              {/* A sort set from a shared desktop link may not be in the preset list */}
+              {sort && !MOBILE_SORTS.some((s) => s.value === `${sort}:${order}`) && (
+                <option value={`${sort}:${order}`}>{`${sort} (${order})`}</option>
+              )}
+            </select>
+          </label>
 
           <Filters
             search={search}
@@ -200,7 +230,7 @@ export function OrdersDashboard() {
           )}
         </section>
 
-        <p className="text-center text-xs text-slate-400">
+        <p className="text-center text-xs text-slate-500">
           Fictional assessment data from the HSSB mock sales-orders API. Overview figures cover the whole dataset; the table reflects your filters.
         </p>
       </main>
