@@ -51,6 +51,29 @@ export function buildUpstreamQuery(input: URLSearchParams): URLSearchParams {
   return out;
 }
 
+/** A real calendar date in YYYY-MM-DD form, or undefined. */
+export function cleanDate(value: string | null): string | undefined {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(value) ? value : undefined;
+}
+
+/**
+ * Filters the API can't apply itself: order-date range and overdue. When any is set, the server
+ * answers from the full dataset (fetched page by page from the API) instead of passing the query through.
+ */
+export function parseExtraFilters(input: URLSearchParams) {
+  let from = cleanDate(input.get("from"));
+  let to = cleanDate(input.get("to"));
+  if (from && to && from > to) [from, to] = [to, from];
+  return { from, to, overdue: input.get("overdue") === "1" };
+}
+
+export function needsDataset(input: URLSearchParams): boolean {
+  const { from, to, overdue } = parseExtraFilters(input);
+  return Boolean(from || to || overdue);
+}
+
 // SalesIds look like SO-MOCK-00001; reject anything that could change the upstream path.
 export function isValidSalesId(id: string): boolean {
   return /^[A-Za-z0-9-]{1,40}$/.test(id);

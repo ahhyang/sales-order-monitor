@@ -12,15 +12,19 @@ interface Result<T> {
  * Fetches JSON from our own API routes. `url` is the cache key: when it changes the previous
  * request is aborted, so a slow response can never overwrite a newer one. The last good data is
  * kept while the next request is in flight so the UI can dim it instead of flashing a skeleton.
+ * `seed` is data the server already rendered for `seed.url`, so the first paint needs no request.
  */
-export function useApi<T>(url: string | null) {
+export function useApi<T>(url: string | null, seed?: { url: string; data: T }) {
   const [nonce, setNonce] = useState(0);
-  const [result, setResult] = useState<Result<T> | null>(null);
-  const [lastData, setLastData] = useState<T | undefined>(undefined);
   const key = url ? `${url}#${nonce}` : "";
+  const [result, setResult] = useState<Result<T> | null>(() =>
+    seed && seed.url === url ? { key: `${seed.url}#0`, data: seed.data } : null,
+  );
+  const [lastData, setLastData] = useState<T | undefined>(seed?.data);
+  const settled = result?.key === key;
 
   useEffect(() => {
-    if (!url) return;
+    if (!url || settled) return;
     const controller = new AbortController();
 
     fetch(url, { signal: controller.signal, headers: { accept: "application/json" } })
@@ -45,10 +49,9 @@ export function useApi<T>(url: string | null) {
       });
 
     return () => controller.abort();
-  }, [url, key]);
+  }, [url, key, settled]);
 
   const retry = useCallback(() => setNonce((n) => n + 1), []);
-  const settled = result?.key === key;
 
   return {
     data: settled ? result.data : undefined,

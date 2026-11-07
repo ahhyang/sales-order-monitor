@@ -2,17 +2,22 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { formatInt } from "@/lib/format";
-import { DEFAULT_PAGE_SIZE, PAGE_SIZES, SORT_FIELDS, type SortField } from "@/lib/query";
+import { formatCurrency, formatInt } from "@/lib/format";
+import type { Insights as InsightsData } from "@/lib/orders";
+import { todayInSabah } from "@/lib/orders";
+import { DEFAULT_PAGE_SIZE, type SortField } from "@/lib/query";
 import type { MetaResponse, OrdersListResponse } from "@/lib/types";
 import { useApi } from "@/lib/useApi";
+import { exportUrl, insightsUrl, listUrl, readView } from "@/lib/view";
 import { Filters } from "./Filters";
+import { Insights } from "./Insights";
 import { KpiCards } from "./KpiCards";
 import { OrderDrawer } from "./OrderDrawer";
 import { OrdersTable, TableSkeleton } from "./OrdersTable";
 import { Pagination } from "./Pagination";
 
 const SEARCH_DEBOUNCE_MS = 300;
+const AUTO_REFRESH_MS = 60_000;
 // Newest / largest first is the more useful default when a user first clicks these columns.
 const DESC_FIRST: SortField[] = ["CreatedDateTime1", "HAR_TotalSOAmount"];
 const MOBILE_SORTS = [
@@ -25,20 +30,20 @@ const MOBILE_SORTS = [
   { value: "InventSiteId:asc", label: "Branch" },
 ];
 
-export function OrdersDashboard() {
+export interface DashboardSeed {
+  listUrl: string;
+  list?: OrdersListResponse;
+  meta?: MetaResponse;
+}
+
+export function OrdersDashboard({ seed }: { seed?: DashboardSeed }) {
   const pathname = usePathname();
   const params = useSearchParams();
 
   // The URL is the source of truth for filters, so views can be bookmarked and shared.
-  const q = params.get("q") ?? "";
-  const status = params.get("status") ?? "";
-  const site = params.get("site") ?? "";
-  const page = Math.max(1, Number(params.get("page")) || 1);
-  const sizeParam = Number(params.get("pageSize"));
-  const pageSize = (PAGE_SIZES as readonly number[]).includes(sizeParam) ? sizeParam : DEFAULT_PAGE_SIZE;
-  const sortParam = params.get("sort") ?? "";
-  const sort = (SORT_FIELDS as readonly string[]).includes(sortParam) ? (sortParam as SortField) : "";
-  const order = params.get("order") === "desc" ? "desc" : "asc";
+  const view = readView((k) => params.get(k));
+  const { q, status, site, page, pageSize, sort, order, from, to, overdue, live } = view;
+  const today = todayInSabah();
 
   // Reads and writes window.location synchronously (Next syncs useSearchParams with history.replaceState),
   // so two quick changes in a row can't overwrite each other with a stale snapshot of the params.
@@ -72,17 +77,24 @@ export function OrdersDashboard() {
     return () => clearTimeout(t);
   }, [search, q, update]);
 
-  const apiQuery = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-  if (q) apiQuery.set("q", q);
-  if (status) apiQuery.set("status", status);
-  if (site) apiQuery.set("site", site);
-  if (sort) {
-    apiQuery.set("sort", sort);
-    apiQuery.set("order", order);
-  }
+  // The server already rendered the first page for this exact URL; reuse it instead of refetching.
+  const list = useApi<OrdersListResponse>(listUrl(view), seed?.list && { url: seed.listUrl, data: seed.list });
+  const meta = useApi<MetaResponse>("/api/meta", seed?.meta && { url: "/api/meta", data: seed.meta });
+  const insights = useApi<InsightsData>(insightsUrl(view));
+  const { retry: retryList } = list;
+  const { retry: retryInsights } = insights;
+  const refreshAll = useCallback(() => {
+    retryList();
+    retryInsights();
+  }, [retryList, retryInsights]);
 
-  const list = useApi<OrdersListResponse>(`/api/orders?${apiQuery}`);
-  const meta = useApi<MetaResponse>("/api/meta");
+  // Wall-display mode (?live=1): refresh every minute while the tab is visible.
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => document.visibilityState === "visible" && refreshAll(), AUTO_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [live, refreshAll]);
+
   const [openId, setOpenId] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [seen, setSeen] = useState<OrdersListResponse | undefined>(undefined);
@@ -92,12 +104,14 @@ export function OrdersDashboard() {
   }
 
   const shown = list.data ?? list.staleData;
-  const hasFilters = Boolean(q || status || site);
+  const ins = insights.data ?? insights.staleData;
+  const hasFilters = Boolean(q || status || site || from || to || overdue);
   const clearFilters = () => {
     setSearch("");
-    update({ q: null, status: null, site: null });
+    update({ q: null, status: null, site: null, from: null, to: null, overdue: null });
   };
   const toggleStatus = (value: string) => update({ status: status === value ? null : value });
+  const setDates = (r: { from: string; to: string } | null) => update({ from: r?.from ?? null, to: r?.to ?? null });
   const onSort = (field: SortField) => {
     const nextOrder = sort === field ? (order === "asc" ? "desc" : "asc") : DESC_FIRST.includes(field) ? "desc" : "asc";
     update({ sort: field, order: nextOrder });
@@ -106,30 +120,44 @@ export function OrdersDashboard() {
   return (
     <div className="min-h-dvh bg-slate-100/70">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div aria-hidden className="grid size-9 place-items-center rounded-lg bg-slate-900 text-sm font-bold text-white">SO</div>
-            <div>
-              <h1 className="text-lg font-semibold leading-tight text-slate-900">Sales Order Monitor</h1>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <div aria-hidden className="grid size-9 shrink-0 place-items-center rounded-lg bg-slate-900 text-sm font-bold text-white">SO</div>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold leading-tight text-slate-900 sm:text-lg">Sales Order Monitor</h1>
               <p className="text-xs text-slate-500">Orders across all branches</p>
             </div>
           </div>
-          <div className="flex items-center gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
             {updatedAt && (
-              <span className="hidden sm:inline" suppressHydrationWarning>
+              <span className="hidden lg:inline" suppressHydrationWarning>
                 Updated {updatedAt.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" })}
               </span>
             )}
             <button
               type="button"
-              onClick={list.retry}
+              onClick={() => update({ live: live ? null : 1 }, false)}
+              aria-pressed={live}
+              title="Refresh automatically every minute (for wall displays)"
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-slate-900 ${
+                live ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <span aria-hidden className={`size-2 rounded-full ${live ? "animate-pulse bg-emerald-500" : "bg-slate-300"}`} />
+              <span className="hidden sm:inline">Auto-refresh</span>
+              <span className="sm:hidden">Live</span>
+            </button>
+            <button
+              type="button"
+              onClick={refreshAll}
               disabled={list.loading}
+              aria-label="Refresh now"
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-slate-900"
             >
               <svg aria-hidden viewBox="0 0 20 20" className={`size-4 fill-current ${list.loading ? "animate-spin" : ""}`}>
                 <path d="M10 3a7 7 0 0 1 6.32 4H14a.75.75 0 0 0 0 1.5h4.25A.75.75 0 0 0 19 7.75V3.5a.75.75 0 0 0-1.5 0v2.02A8.5 8.5 0 1 0 18.5 10a.75.75 0 0 0-1.5 0A7 7 0 1 1 10 3Z" />
               </svg>
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </button>
           </div>
         </div>
@@ -137,9 +165,9 @@ export function OrdersDashboard() {
 
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
         <section aria-labelledby="overview-heading">
-          <div className="mb-3 flex items-baseline justify-between">
+          <div className="mb-3 flex items-baseline justify-between gap-3">
             <h2 id="overview-heading" className="text-sm font-semibold text-slate-700">Overview</h2>
-            <p className="text-xs text-slate-500">All branches · tap a status to filter</p>
+            <p className="text-right text-xs text-slate-500">All branches · tap a status to filter</p>
           </div>
           {!shown?.summary && list.error ? (
             <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">Dashboard figures unavailable.</div>
@@ -148,15 +176,74 @@ export function OrdersDashboard() {
           )}
         </section>
 
-        <section aria-labelledby="orders-heading" className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between gap-3 px-4 pt-4">
-            <h2 id="orders-heading" className="text-base font-semibold text-slate-900">Sales orders</h2>
-            {shown && hasFilters && (
-              <span className="text-xs text-slate-500">
-                {formatInt(shown.summary.filtered_orders)} of {formatInt(shown.summary.total_orders)} match
-              </span>
-            )}
+        <section aria-labelledby="insights-heading">
+          <div className="mb-3 flex items-baseline justify-between gap-3">
+            <h2 id="insights-heading" className="text-sm font-semibold text-slate-700">Insights</h2>
+            <p className="text-right text-xs text-slate-500">
+              {hasFilters ? "Reflects your filters" : "All orders"}
+              {ins && ` · ${formatInt(ins.filtered.count)} orders · ${formatCurrency(ins.filtered.value)}`}
+            </p>
           </div>
+          <Insights
+            data={ins}
+            loading={insights.loading}
+            error={insights.error}
+            onRetry={insights.retry}
+            site={site}
+            from={from}
+            to={to}
+            overdueOnly={overdue}
+            onSite={(v) => update({ site: v })}
+            onMonth={setDates}
+            onOverdue={(on) => update({ overdue: on ? 1 : null })}
+            onOpenOrder={setOpenId}
+          />
+        </section>
+
+        <section aria-labelledby="orders-heading" className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4">
+            <div className="flex items-baseline gap-3">
+              <h2 id="orders-heading" className="text-base font-semibold text-slate-900">Sales orders</h2>
+              {shown && hasFilters && (
+                <span className="text-xs text-slate-500">
+                  {formatInt(shown.summary.filtered_orders)} of {formatInt(shown.summary.total_orders)} match
+                </span>
+              )}
+            </div>
+            <a
+              href={exportUrl(view)}
+              download
+              aria-disabled={!shown?.total}
+              className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-slate-900 ${
+                shown?.total ? "" : "pointer-events-none opacity-40"
+              }`}
+            >
+              <svg aria-hidden viewBox="0 0 20 20" className="size-4 fill-current">
+                <path d="M10 2.75a.75.75 0 0 1 .75.75v7.69l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 0 1 1.06-1.06l2.72 2.72V3.5a.75.75 0 0 1 .75-.75ZM3.5 13a.75.75 0 0 1 .75.75v1.5c0 .41.34.75.75.75h10a.75.75 0 0 0 .75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 15 17.5H5a2.25 2.25 0 0 1-2.25-2.25v-1.5A.75.75 0 0 1 3.5 13Z" />
+              </svg>
+              Export CSV{shown?.total ? ` (${formatInt(shown.total)})` : ""}
+            </a>
+          </div>
+
+          <Filters
+            search={search}
+            onSearch={setSearch}
+            status={status}
+            onStatus={(v) => update({ status: v })}
+            site={site}
+            onSite={(v) => update({ site: v })}
+            from={from}
+            to={to}
+            onDates={setDates}
+            overdue={overdue}
+            onOverdue={(on) => update({ overdue: on ? 1 : null })}
+            today={today}
+            statuses={meta.staleData?.facets.statuses ?? []}
+            sites={meta.staleData?.facets.sites ?? []}
+            facetsError={meta.error}
+            hasFilters={hasFilters}
+            onClear={clearFilters}
+          />
 
           {/* Column headers are hidden on phones, so sorting gets its own control there */}
           <label className="flex items-center gap-2 px-4 pt-3 text-xs font-medium text-slate-600 md:hidden">
@@ -179,20 +266,6 @@ export function OrdersDashboard() {
             </select>
           </label>
 
-          <Filters
-            search={search}
-            onSearch={setSearch}
-            status={status}
-            onStatus={(v) => update({ status: v })}
-            site={site}
-            onSite={(v) => update({ site: v })}
-            statuses={meta.staleData?.facets.statuses ?? []}
-            sites={meta.staleData?.facets.sites ?? []}
-            facetsError={meta.error}
-            hasFilters={hasFilters}
-            onClear={clearFilters}
-          />
-
           <div className="relative">
             {list.loading && shown && (
               <div aria-hidden className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-slate-100">
@@ -213,7 +286,7 @@ export function OrdersDashboard() {
               />
             ) : (
               <div className={list.loading ? "opacity-60 transition-opacity" : "transition-opacity"} aria-busy={list.loading}>
-                <OrdersTable orders={shown.data} sort={sort} order={order} onSort={onSort} onOpen={setOpenId} />
+                <OrdersTable orders={shown.data} sort={sort} order={order} onSort={onSort} onOpen={setOpenId} today={today} />
               </div>
             )}
           </div>
@@ -231,7 +304,7 @@ export function OrdersDashboard() {
         </section>
 
         <p className="text-center text-xs text-slate-500">
-          Fictional assessment data from the HSSB mock sales-orders API. Overview figures cover the whole dataset; the table reflects your filters.
+          Fictional assessment data from the HSSB mock sales-orders API. Overview figures cover the whole dataset; insights and the table reflect your filters. Overdue = open order past its requested ship date (Sabah time).
         </p>
       </main>
 
@@ -271,7 +344,7 @@ function EmptyState(props: { outOfRange: boolean; hasFilters: boolean; onClear: 
         {outOfRange
           ? "There are fewer results than this page number. Go back to the first page."
           : hasFilters
-            ? "No sales orders match your search and filters. Try a different term or clear the filters."
+            ? "No sales orders match your search and filters. Try a different term, date range, or clear the filters."
             : "There are no sales orders to show."}
       </p>
       {(outOfRange || hasFilters) && (

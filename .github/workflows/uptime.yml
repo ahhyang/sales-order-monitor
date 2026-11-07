@@ -1,0 +1,19 @@
+name: Uptime check
+
+# Polls the production health endpoint. A failed run makes GitHub notify the repo owner,
+# which is a free alert channel; set ALERT_WEBHOOK_URL on Vercel for instant chat alerts too.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /api/health
+        run: |
+          body=$(curl -sS --max-time 20 -w '\n%{http_code}' https://sales-order-monitor-lovat.vercel.app/api/health)
+          code=$(echo "$body" | tail -n1)
+          echo "$body" | head -n -1
+          test "$code" = "200"

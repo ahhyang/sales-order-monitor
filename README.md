@@ -2,23 +2,27 @@
 
 [![CI](https://github.com/ahhyang/sales-order-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/ahhyang/sales-order-monitor/actions/workflows/ci.yml)
 
-A small web app for a sales team to monitor sales orders across branches, built for the Harrisons Sabah Sdn Bhd IT Executive technical assessment. All data comes live from the provided **fictional** mock REST API.
+A web app for a sales team to monitor sales orders across branches, built for the Harrisons Sabah Sdn Bhd IT Executive technical assessment. All data comes live from the provided **fictional** mock REST API.
 
 **Live app:** https://sales-order-monitor-lovat.vercel.app
 **Source:** https://github.com/ahhyang/sales-order-monitor
 
 ## Features
 
-- **Dashboard** – total orders, open/pending, completed (invoiced + delivered, with breakdown), cancelled, and total order value (RM). Status cards are clickable shortcuts that filter the table.
-- **Order listing** – order no. (SalesId), customer (name + account), branch/site, order date (shown in Sabah time), status badge, and amount. Server-side pagination (10/25/50/100 rows) and sortable columns (a "Sort by" menu on phones, where column headers are hidden).
-- **Search & filters** – debounced free-text search (order no., customer, account, PO ref, sales taker) plus status and branch/site filters. Filter options and counts come from the API's `/meta` endpoint, not a hard-coded list.
-- **Order detail panel** – click any row to load that order from `GET /sales-orders/{id}` (amounts, invoiced/balance, dates, district, sales taker).
-- **Shareable views** – filters, sort and page live in the URL (e.g. `/?status=Open+order&site=B20&q=Siti`).
-- **UX states** – skeletons on first load; on refetch the old rows stay visible but dimmed with a progress bar (no flicker); empty state with "Clear filters"; error state with "Try again"; out-of-range page handling. Responsive: table on tablet/desktop, stacked cards on phones.
+**Core requirements**
+- **Dashboard** – total orders, open/pending, completed (invoiced + delivered, with breakdown), cancelled, and total order value (RM). Status cards are clickable filters.
+- **Order listing** – order no. (SalesId), customer, branch/site, order date (Sabah time), status and amount. Server-side pagination (10/25/50/100), sortable columns, and a "Sort by" menu on phones.
+- **Search & filters** – debounced search (order no., customer, account, PO ref, sales taker), status and branch filters. Options and counts come from the API's `/meta`.
+- **UX states** – the first page is server-rendered (no loading flash); skeletons for insights; dimmed rows plus a progress bar while refetching; empty state with "Clear filters"; error state with "Try again"; an app-level error boundary; responsive table on desktop and cards on phones.
 
-## Tech stack
-
-Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · Vitest · deployed on Vercel.
+**Operational features**
+- **Overdue follow-up** – an open order whose requested ship date has passed is flagged "Nd overdue" in the table. An insights panel shows the overdue count and value, an aging breakdown (1–30 / 31–60 / 61–90 / 90+ days), and the five longest-waiting orders (click to open). "Overdue only" filters the table.
+- **Insights charts** – order value by branch and monthly order value. Clicking a bar filters by that branch or month. The charts cross-filter: each ignores its own filter, so the selection stays highlighted among its peers.
+- **Order-date range filter** – presets (last 30/90 days, this year), a custom from/to range, or a click on a month bar.
+- **CSV export** – downloads every order matching the current filters and sort (not just the visible page). The file opens cleanly in Excel (UTF-8 BOM) and is protected against CSV formula injection.
+- **Auto-refresh** – "Auto-refresh" (`?live=1`) reloads data every 60 s while the tab is visible, for office wall displays.
+- **Order detail panel** – loaded from `GET /sales-orders/{id}`.
+- **Shareable views** – every filter, sort, page and the live mode live in the URL.
 
 ## Run locally
 
@@ -30,107 +34,115 @@ cp .env.example .env.local     # contains SALES_API_KEY
 npm run dev                    # http://localhost:3000
 ```
 
-Other scripts:
-
-```bash
-npm run build && npm start     # production build
-npm test                       # unit tests (Vitest)
-npm run lint                   # ESLint
-npm run typecheck              # tsc --noEmit
-```
+| Script | What it does |
+| --- | --- |
+| `npm run build && npm start` | production build |
+| `npm test` | 36 unit tests (Vitest) |
+| `npm run test:e2e` | 17 Playwright end-to-end tests, desktop and mobile (run `npx playwright install chromium` and `npm run build` first) |
+| `npm run lint` / `npm run typecheck` | ESLint / `tsc --noEmit` |
 
 ### Environment variables
 
 | Name | Required | Purpose |
 | --- | --- | --- |
 | `SALES_API_KEY` | yes | Assessment API key, sent as `x-assessment-key` from the server only |
-| `SALES_API_BASE_URL` | no | Override the upstream base URL (defaults to `https://hiring.harrisons.my/api/mock/sales-orders`) |
+| `SALES_API_BASE_URL` | no | Override the upstream base URL |
+| `ALERT_WEBHOOK_URL` | no | Slack/Teams/Discord-compatible webhook for server-error alerts |
+| `RATE_LIMIT_PER_MIN` / `EXPORT_LIMIT_PER_MIN` | no | Per-IP limits (defaults 120 and 10) |
 
-## Architecture & API integration notes
+## Architecture & API integration
 
 ```
-Browser (React client component)
-   │  fetch /api/orders?…, /api/orders/:id, /api/meta       (same origin, no key)
+Browser (React)
+   │  first page: HTML already contains the data (server-rendered)
+   │  afterwards: fetch /api/orders · /api/orders/:id · /api/insights · /api/orders/export · /api/meta
    ▼
-Next.js route handlers  (app/api/**)  — thin backend-for-frontend proxy
-   │  validates & allow-lists params, adds x-assessment-key, 10 s timeout,
-   │  maps upstream failures to clean JSON errors, short CDN cache
+proxy.ts — per-IP rate limit (429 + Retry-After)
+   ▼
+Next.js route handlers → lib/service.ts
+   │  A) pass-through: q / status / site / sort / page go straight to the API
+   │  B) dataset mode: date range, overdue, charts and export need data the API can't filter,
+   │     so the server reads every page (12 × 100, in parallel, cached 30 s) and filters itself
+   │  validates input, adds x-assessment-key, 10 s timeout, maps errors, logs + alerts
    ▼
 HSSB mock API  https://hiring.harrisons.my/api/mock/sales-orders   (read-only)
 ```
 
-- **Why a proxy instead of calling the API from the browser?** The API does allow CORS, but calling it directly would ship the access key in the JS bundle. Keeping the key in a server env var mirrors how a real ERP credential should be handled, gives one place to validate input, and lets errors be normalised. I verified the built client bundle contains no copy of the key.
-- **Input validation** (`lib/query.ts`, unit-tested): only `page`, `pageSize`, `status`, `site`, `q`, `sort`, `order` are forwarded; numbers are clamped (`pageSize` ≤ 100), text is trimmed and capped at 100 chars, `sort` must be one of the API's documented fields, and order IDs must match `^[A-Za-z0-9-]{1,40}$` so they cannot alter the upstream path.
-- **Error mapping** (`lib/upstream.ts`): network failure → 502, timeout → 504, upstream 401/403 → 502 ("rejected our credentials", without exposing details), 404 → 404, malformed JSON → 502. Any unexpected exception becomes a generic 500 and is logged server-side only. Error responses are `no-store`, so a transient failure is never cached at the CDN. The UI shows the message with a retry button, and `app/error.tsx` catches render bugs so the user never sees a blank page.
-- **Own response contract**: the proxy returns only the fields the UI uses and drops upstream extras like `links`, which would reveal the backend URL.
-- **Security headers** (`next.config.ts`): Content-Security-Policy (`connect-src 'self'`, since the browser only talks to its own origin; `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy` and `Permissions-Policy`. The `X-Powered-By` header is removed. HTTPS/HSTS comes from Vercel.
-- **Data fetching** (`lib/useApi.ts`): a small hook keyed by URL. Each new request aborts the previous one (`AbortController`), so a slow response can never overwrite newer results while typing. The last good result is kept so the table dims rather than blanking on refetch.
-- **State in the URL**: filters/sort/page are read from `useSearchParams` and written with `history.replaceState`, which Next.js syncs with its router. Writing synchronously (rather than from a captured params snapshot) fixed a bug found in testing where two quick filter changes overwrote each other.
-- **Caching**: route handlers send `s-maxage=30, stale-while-revalidate=60` (meta: 5 min), so repeat queries are served from Vercel's CDN (measured ≈0.14 s on a HIT vs ≈0.46 s on a MISS) and the upstream is spared. This is fixture data, so a short cache is safe. A live ERP feed would need a shorter cache or none, and the Refresh button would then need to bypass it.
-- **Hosting region**: `vercel.json` pins the server functions to `sin1` (Singapore), the same region that serves the mock API, instead of Vercel's US-East default. That avoids a trans-Pacific round trip on every request and is also closer to users in Sabah.
-- **No full dataset in the UI**: all filtering, searching, sorting and pagination happen server-side in the API; the client only ever holds one page.
+- **Why a server proxy rather than calling the API from the browser?** The API allows CORS, but a browser call would ship the access key to every user. The key lives in a server env var. The proxy also gives one place to validate input, normalise errors, cache and rate-limit. I verified that neither the HTML nor the JS bundle contains the key.
+- **Pass-through vs dataset mode.** The API only filters by `q`, `status` and `site`, so whenever possible the request is passed straight through and the API does the work. Date ranges, overdue, the charts and full exports need fields the API can't filter on. For those, the server reads all pages through the same API, with each page cached for 30 s, and filters in `lib/orders.ts`. That logic mirrors the API's own search rules (case-insensitive substring over the five documented fields; exact, case-insensitive status and site). A **contract test** checks that both paths return the same orders in the same order. *For a real ERP I would not read the whole table per request; I'd ask for date filters and aggregate endpoints on the API side. With 1,200 fixture rows this is cheap and keeps the UI honest.*
+- **Server-rendered first page.** `app/page.tsx` loads the first page and filter options on the server, so the initial HTML already contains the data. The client builds byte-identical API URLs (`lib/view.ts`) and reuses that data instead of refetching; an E2E test checks that no list request is made on first load. Insights load client-side so a slow aggregation never delays the first paint.
+- **Input validation** (`lib/query.ts`): only known params are forwarded. Numbers are clamped (`pageSize` ≤ 100), text is trimmed and capped at 100 chars, `sort` is allow-listed, dates must be real `YYYY-MM-DD` (a reversed range is swapped), and order IDs must match `^[A-Za-z0-9-]{1,40}$`.
+- **Errors**: network → 502, timeout → 504, upstream 401/403 → 502 (no credential details), 404 → 404, malformed JSON → 502, anything unexpected → generic 500. Error responses are `no-store`, so the CDN never caches a failure.
+- **Client data fetching** (`lib/useApi.ts`): each new request aborts the previous one, so stale responses can't overwrite newer ones, and the last good data stays visible while refetching. URL state is written with `history.replaceState`, which is synchronous, so two quick filter changes can't clobber each other (a bug found and fixed during testing).
+- **Caching & region**: the CDN serves `s-maxage=30, stale-while-revalidate=60` (≈0.14 s on a cache hit vs ≈0.46 s on a miss), and functions run in `sin1` (Singapore), next to the API.
+- **Security headers** (`next.config.ts`): CSP with `connect-src 'self'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy and Permissions-Policy, with `X-Powered-By` removed. HTTPS/HSTS comes from Vercel.
+
+### Operations: rate limiting, monitoring, alerting
+
+- **Rate limiting** (`proxy.ts`, `lib/rateLimit.ts`): 120 API requests per minute per IP, 10 exports per minute; excess requests get 429 with `Retry-After`. The counter is in-memory, so each serverless instance counts separately. In production I'd enforce the same rule at the edge (Vercel WAF) or in Redis.
+- **Health check**: `GET /api/health` makes a live (uncached) upstream call and returns status, upstream latency, region and commit, with 200 when healthy and 503 when not.
+- **Uptime monitoring**: `.github/workflows/uptime.yml` polls the health endpoint every 30 minutes; a failed run makes GitHub notify the repo owner.
+- **Alerting & logs**: server errors are logged as structured JSON (searchable in Vercel logs). If `ALERT_WEBHOOK_URL` is set, they also post to a chat channel after the response is sent (via `after()`), throttled to one alert per 5 minutes so an outage doesn't spam.
 
 ### Decisions & assumptions
 
-- **Status mapping:** "Open / pending" = `Open order`; "Completed" = `Invoiced` + `Delivered`; "Cancelled" = `Cancelled`.
-- **Order date** = `CreatedDateTime1` (UTC), displayed in `Asia/Kuching` (Sabah) time. **Amount** = `HAR_TotalSOAmount`, shown in MYR.
-- **Branch** = `InventSiteId` code. The API gives no branch names, so I don't invent any mapping.
+- **Status mapping:** "Open / pending" = `Open order`; "Completed" = `Invoiced` + `Delivered`.
+- **Overdue** = `Open order` whose `ShippingDateRequested` is before today in Sabah time. The fixture data ends on 1 Oct 2026, so as of today every open order is overdue. The aging breakdown is what makes that figure useful.
+- **Order date** = `CreatedDateTime1` (UTC) shown and filtered in `Asia/Kuching` time. **Amount** = `HAR_TotalSOAmount` (MYR). **Branch** = `InventSiteId`; the API gives no branch names, so I don't invent any.
+- **Overview cards** always show the whole dataset (that is what the API's `summary` provides). The insights header shows the filtered order count and value.
 
-### Known limitations
+### Known limitations / next steps
 
-- The API's `summary` block is dataset-wide (only `filtered_orders` reflects filters), so the overview cards always show all branches; the table header shows "N of 1,200 match" for the filtered count. Per-filter order value would need either an API change or fetching every page client-side, which I avoided.
-- No authentication on the app itself — anyone with the URL can view the (fictional) data. A real deployment would sit behind company SSO (e.g. Microsoft Entra ID).
-- No rate limiting on the proxy routes. The CDN cache absorbs repeated identical queries, but a production version would add per-IP limits (e.g. Vercel Firewall or Upstash) so the proxy can't be used to hammer the ERP.
-- Data loads after the page shell renders (client-side fetch). Server-rendering the first page of results would improve first paint; I chose the simpler client-side model for the time box.
-- No date-range filter, CSV export or auto-refresh (out of scope for the time box).
-- Unit tests cover validation and the upstream client; UI behaviour was tested manually (see below). With more time I'd add Playwright end-to-end tests.
+- No login. A real deployment would sit behind company SSO (e.g. Microsoft Entra ID), with branch managers restricted to their own branch.
+- Dataset mode reads the whole table through the API. That works for 1,200 rows; a production ERP needs server-side date filters and aggregates.
+- The rate limiter is per instance (see above). Alerts need a webhook URL configured.
+- E2E tests run against the live mock API, so an API outage fails CI. That is intentional for the contract test, but a production suite would also have a mocked run.
+- The time box was 2–3 hours for the core requirements. The operational features above were added in a later improvement pass.
 
-## Testing performed
+## Testing
 
-- **Automated:** `npm test` runs 16 Vitest cases:
-  - Query validation: defaults, clamping, trimming, length caps, sort allow-list, unknown-param stripping, SalesId validation.
-  - Upstream client, with `fetch` mocked: key sent server-side, missing-key guard, 404/401/500 mapping, network/timeout mapping, non-JSON bodies, error responses that don't leak internal details.
-  - Plus `npm run lint`, `npm run typecheck` and `npm run build`.
-  - GitHub Actions runs all four on every push and pull request.
-- **API checks with curl** before building: list, `/meta`, single order, 404 for unknown ID, 401 without key, CORS preflight, `pageSize` capping, and that `summary` is not filtered.
-- **Manual browser testing** against the production build:
-  - Dashboard numbers match the API (1,200 / 420 / 660 / 120 / RM 998,244.30).
-  - Search "Siti" + status "Open order" + branch B20 → 6 results, the same as calling the API directly.
-  - Sorting by amount (desc), order detail panel (open, Esc to close), pagination, rows per page.
-  - Empty state (`?q=zzzz`), error state (server started with a wrong API key → friendly message + retry), invalid ID → 400, unknown ID → 404.
-  - Mobile (375 px) and desktop layouts, including the mobile sort menu; no console errors or CSP violations.
-- **Security:** `npm audit` clean for production deps (the create-next-app template pinned Next 15.5.4, which has known advisories, so I upgraded to Next 16.4.3); confirmed the API key is not in `.next/static`.
+- **Unit (Vitest, 36 tests)**: query validation; the upstream client with `fetch` mocked (key handling, error mapping, timeouts, non-JSON); order logic (overdue days, the API-mirroring search, Sabah-time date boundaries, sorting, summary, aging buckets, cross-filter context); CSV quoting and formula-injection guard; rate limiter; alert throttling; date presets; and server/client URL parity.
+- **End-to-end (Playwright, 17 tests on desktop Chrome and a Pixel 7 profile)**: the server-rendered first load makes no client list request; search + status + branch gives 6 results; empty state and clear; detail panel open/close; overdue filter and chart cross-filtering; mocked API failure shows the error, then "Try again" recovers; mobile sort; **contract test** (dataset mode == API pass-through across 5 queries); CSV export headers and row count; 400/404/health; security headers; the key is absent from the HTML.
+- **CI** (GitHub Actions): lint → typecheck → unit → build, then Playwright E2E, on every push and pull request.
+- **Manual**: dashboard figures checked against raw API responses with curl; the layout checked at 375 px and desktop; no console errors or CSP violations; the rate limit returned 429 on the 11th export in a minute.
 
 ## AI-use disclosure
 
-I used **Claude Code (Anthropic, model Claude Opus 5.5)** as a pair-programmer for this assessment. It probed the API with curl, scaffolded the Next.js project, and drafted the components, proxy routes, unit tests and this README; it also drove a browser to test the app.
+I used **Claude Code (Anthropic, model Claude Opus 5.5)** as a pair-programmer. It probed the API with curl, scaffolded the project, drafted the components, routes and tests, ran browser and E2E tests, and deployed to Vercel.
 
-What I reviewed, verified or changed:
+What I verified or changed:
 
-- Read through all source files and made sure I can explain each design decision above (proxy pattern, validation, abort handling, URL state).
-- Verified the dashboard figures and a filtered query against raw API responses.
-- Caught and fixed a real bug during browser testing (rapid successive filter changes lost the first filter due to a stale params snapshot).
-- Upgraded Next.js after `npm audit` flagged the template's version.
-- Checked that the API key never reaches the browser bundle.
+- **Security:** upgraded the template's Next.js 15.5.4 after `npm audit` flagged advisories (including a critical RCE); confirmed the API key never reaches the browser; stripped the upstream `links` field that exposed the backend URL.
+- **Bugs caught in testing:**
+  - Rapid filter changes lost the first filter (stale params snapshot).
+  - The alert throttle only worked by accident (its initial timestamp was 0); a unit test exposed it.
+  - Chart filters made the other bars disappear, so the charts were redesigned to cross-filter.
+- **Deployment:** `sales-order-monitor.vercel.app` turned out to be someone else's project, so I identified and submitted my real production alias. I also moved functions from US-East to Singapore, which roughly halved API latency.
+- **Verified the data logic**: the server-side search matches the API exactly (checked on 10 queries by hand, then automated as a contract test).
 
 ## Project structure
 
 ```
 app/
-  page.tsx                  # renders the dashboard
-  error.tsx                 # error boundary (recoverable screen instead of a blank page)
-  api/orders/route.ts       # GET list + summary (proxy)
-  api/orders/[id]/route.ts  # GET single order (proxy)
-  api/meta/route.ts         # GET status/site facets (proxy)
-components/                 # OrdersDashboard, KpiCards, Filters, OrdersTable, Pagination, OrderDrawer, StatusBadge
+  page.tsx                  # server-renders the first page, then hands over to the client
+  error.tsx                 # error boundary
+  api/orders/route.ts       # list + summary (pass-through or dataset mode)
+  api/orders/[id]/route.ts  # single order
+  api/orders/export/route.ts# CSV download
+  api/insights/route.ts     # overdue aging, value by branch, monthly trend
+  api/meta/route.ts         # status/site facets
+  api/health/route.ts       # health check for uptime monitoring
+components/                 # OrdersDashboard, KpiCards, Insights, Filters, OrdersTable, Pagination, OrderDrawer, StatusBadge
 lib/
-  upstream.ts               # server-only API client (key, timeout, error mapping)
-  query.ts                  # param allow-listing/validation (unit-tested)
-  useApi.ts                 # client fetch hook with abort + stale data
-  format.ts                 # MYR currency and Sabah-time date formatting
-  types.ts                  # API response types
-tests/                      # query.test.ts, upstream.test.ts
-next.config.ts              # security headers
-vercel.json                 # pins functions to sin1 (Singapore)
-.github/workflows/ci.yml    # lint, typecheck, test, build on every push
+  upstream.ts               # server-only API client (key, timeout, error mapping, logging/alerts)
+  service.ts                # business logic: pass-through vs dataset mode, insights, export
+  orders.ts                 # pure order logic: filters, overdue, insights, CSV
+  query.ts / view.ts        # input validation; URL view state shared by server and client
+  useApi.ts                 # client fetch hook (abort, stale data, server seed)
+  rateLimit.ts / alert.ts   # rate limiter; throttled webhook alerts
+proxy.ts                    # rate limiting for /api/*
+tests/                      # Vitest unit tests
+e2e/                        # Playwright end-to-end + API contract tests
+.github/workflows/          # ci.yml (checks + E2E), uptime.yml (health every 30 min)
+next.config.ts · vercel.json# security headers · Singapore region
 ```

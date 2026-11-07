@@ -1,4 +1,5 @@
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
+import { daysOverdue } from "@/lib/orders";
 import type { SortField } from "@/lib/query";
 import type { SalesOrder } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
@@ -9,6 +10,7 @@ interface Props {
   order: "asc" | "desc";
   onSort: (field: SortField) => void;
   onOpen: (id: string) => void;
+  today: string;
 }
 
 const COLUMNS: { label: string; field?: SortField; align?: "right" }[] = [
@@ -20,7 +22,7 @@ const COLUMNS: { label: string; field?: SortField; align?: "right" }[] = [
   { label: "Amount", field: "HAR_TotalSOAmount", align: "right" },
 ];
 
-export function OrdersTable({ orders, sort, order, onSort, onOpen }: Props) {
+export function OrdersTable({ orders, sort, order, onSort, onOpen, today }: Props) {
   return (
     <>
       {/* Desktop / tablet: table */}
@@ -81,7 +83,10 @@ export function OrdersTable({ orders, sort, order, onSort, onOpen }: Props) {
                   {formatDate(o.CreatedDateTime1)}
                 </td>
                 <td className="px-4 py-3">
-                  <StatusBadge status={o.SalesStatus} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge status={o.SalesStatus} />
+                    <OverdueTag days={daysOverdue(o, today)} />
+                  </div>
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-slate-900">
                   {formatCurrency(o.HAR_TotalSOAmount)}
@@ -112,6 +117,7 @@ export function OrdersTable({ orders, sort, order, onSort, onOpen }: Props) {
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 <StatusBadge status={o.SalesStatus} />
+                <OverdueTag days={daysOverdue(o, today)} />
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700">{o.InventSiteId}</span>
                 <span>{formatDate(o.CreatedDateTime1)}</span>
               </div>
@@ -120,6 +126,15 @@ export function OrdersTable({ orders, sort, order, onSort, onOpen }: Props) {
         ))}
       </ul>
     </>
+  );
+}
+
+function OverdueTag({ days }: { days: number }) {
+  if (!days) return null;
+  return (
+    <span title={`Requested ship date passed ${days} days ago`} className="whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900">
+      {days}d overdue
+    </span>
   );
 }
 

@@ -1,5 +1,6 @@
 import "server-only";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { notifyOps } from "./alert";
 
 // Server-side client for the mock API. The access key lives in an env var and never reaches the browser.
 
@@ -15,7 +16,7 @@ export class UpstreamError extends Error {
   }
 }
 
-export async function fetchUpstream<T>(path: string, query?: URLSearchParams): Promise<T> {
+export async function fetchUpstream<T>(path: string, query?: URLSearchParams, opts: { fresh?: boolean } = {}): Promise<T> {
   const key = process.env.SALES_API_KEY;
   if (!key) throw new UpstreamError("Server is missing SALES_API_KEY configuration.", 500);
 
@@ -28,7 +29,8 @@ export async function fetchUpstream<T>(path: string, query?: URLSearchParams): P
       headers: { "x-assessment-key": key, accept: "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
       // Fixture data changes rarely; a short cache keeps the UI snappy and spares the upstream.
-      next: { revalidate: 30 },
+      // Health checks pass `fresh` so they measure the real upstream, not the cache.
+      ...(opts.fresh ? { cache: "no-store" as const } : { next: { revalidate: 30 } }),
     });
   } catch (err) {
     const timedOut = err instanceof Error && err.name === "TimeoutError";
@@ -51,10 +53,20 @@ export async function fetchUpstream<T>(path: string, query?: URLSearchParams): P
   }
 }
 
-// Shared by the route handlers so every endpoint fails the same way: JSON `{ error }`, logged if it's on us.
+// Shared by the route handlers so every endpoint fails the same way: JSON `{ error }`.
+// Server-side failures are logged as structured JSON (searchable in Vercel logs) and raise an ops alert.
 export function errorResponse(err: unknown, route: string): NextResponse {
   const status = err instanceof UpstreamError ? err.status : 500;
   const message = err instanceof UpstreamError ? err.message : "Unexpected server error.";
-  if (status >= 500) console.error(`[${route}]`, err);
+  if (status >= 500) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(JSON.stringify({ level: "error", route, status, message, detail, at: new Date().toISOString() }));
+    const alert = () => notifyOps(`Sales Order Monitor: ${route} returned ${status} — ${message}`);
+    try {
+      after(alert); // send after the response so the user isn't kept waiting
+    } catch {
+      void alert(); // outside a request (e.g. unit tests)
+    }
+  }
   return NextResponse.json({ error: message }, { status, headers: { "cache-control": "no-store" } });
 }

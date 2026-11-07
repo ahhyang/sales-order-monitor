@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import type { MetaResponse } from "@/lib/types";
-import { errorResponse, fetchUpstream } from "@/lib/upstream";
+import { getFacets } from "@/lib/service";
+import { errorResponse } from "@/lib/upstream";
 
 // GET /api/meta -> status and site facets, so filter options come from the API rather than hard-coded lists
 export async function GET() {
   try {
-    const { facets } = await fetchUpstream<MetaResponse>("/meta");
+    const facets = await getFacets();
     return NextResponse.json(
       { facets },
       { headers: { "cache-control": "public, s-maxage=300, stale-while-revalidate=600" } },
