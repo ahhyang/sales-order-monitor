@@ -2,7 +2,8 @@
 
 A small web app for a sales team to monitor sales orders across branches, built for the Harrisons Sabah Sdn Bhd IT Executive technical assessment. All data comes live from the provided **fictional** mock REST API.
 
-**Live app:** _TBD — add the deployed URL here_
+**Live app:** https://sales-order-monitor-lovat.vercel.app
+**Source:** https://github.com/ahhyang/sales-order-monitor
 
 ## Features
 
@@ -62,6 +63,7 @@ HSSB mock API  https://hiring.harrisons.my/api/mock/sales-orders   (read-only)
 - **Data fetching** (`lib/useApi.ts`): a small hook keyed by URL. Each new request aborts the previous one (`AbortController`), so a slow response can never overwrite newer results while typing. The last good result is kept so the table dims rather than blanking on refetch.
 - **State in the URL**: filters/sort/page are read from `useSearchParams` and written with `history.replaceState`, which Next.js syncs with its router. Writing synchronously (rather than from a captured params snapshot) fixed a bug found in testing where two quick filter changes overwrote each other.
 - **Caching**: route handlers send `s-maxage=30, stale-while-revalidate=60` (meta: 5 min). This is fixture data, so a short cache is safe; a live ERP feed might need it lower.
+- **Hosting region**: `vercel.json` pins the server functions to `sin1` (Singapore), the same region that serves the mock API, instead of Vercel's US-East default. That avoids a trans-Pacific round trip on every request and is also closer to users in Sabah.
 - **No full dataset in the UI**: all filtering, searching, sorting and pagination happen server-side in the API; the client only ever holds one page.
 
 ### Decisions & assumptions
