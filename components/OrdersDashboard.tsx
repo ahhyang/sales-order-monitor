@@ -103,7 +103,9 @@ export function OrdersDashboard({ seed }: { seed?: DashboardSeed }) {
     setUpdatedAt(new Date());
   }
 
+  // `shown` keeps the previous rows visible (dimmed) while loading; `fresh` is only the current filter's result.
   const shown = list.data ?? list.staleData;
+  const fresh = list.data;
   const ins = insights.data ?? insights.staleData;
   const hasFilters = Boolean(q || status || site || from || to || overdue);
   const clearFilters = () => {
@@ -181,7 +183,7 @@ export function OrdersDashboard({ seed }: { seed?: DashboardSeed }) {
             <h2 id="insights-heading" className="text-sm font-semibold text-slate-700">Insights</h2>
             <p className="text-right text-xs text-slate-500">
               {hasFilters ? "Reflects your filters" : "All orders"}
-              {ins && ` · ${formatInt(ins.filtered.count)} orders · ${formatCurrency(ins.filtered.value)}`}
+              {insights.data && ` · ${formatInt(insights.data.filtered.count)} orders · ${formatCurrency(insights.data.filtered.value)}`}
             </p>
           </div>
           <Insights
@@ -204,24 +206,25 @@ export function OrdersDashboard({ seed }: { seed?: DashboardSeed }) {
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4">
             <div className="flex items-baseline gap-3">
               <h2 id="orders-heading" className="text-base font-semibold text-slate-900">Sales orders</h2>
-              {shown && hasFilters && (
+              {/* Counts come from fresh data only, never from the previous filter's results */}
+              {fresh && hasFilters && (
                 <span className="text-xs text-slate-500">
-                  {formatInt(shown.summary.filtered_orders)} of {formatInt(shown.summary.total_orders)} match
+                  {formatInt(fresh.summary.filtered_orders)} of {formatInt(fresh.summary.total_orders)} match
                 </span>
               )}
             </div>
             <a
               href={exportUrl(view)}
               download
-              aria-disabled={!shown?.total}
+              aria-disabled={fresh?.total === 0}
               className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-slate-900 ${
-                shown?.total ? "" : "pointer-events-none opacity-40"
+                fresh?.total === 0 ? "pointer-events-none opacity-40" : ""
               }`}
             >
               <svg aria-hidden viewBox="0 0 20 20" className="size-4 fill-current">
                 <path d="M10 2.75a.75.75 0 0 1 .75.75v7.69l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 0 1 1.06-1.06l2.72 2.72V3.5a.75.75 0 0 1 .75-.75ZM3.5 13a.75.75 0 0 1 .75.75v1.5c0 .41.34.75.75.75h10a.75.75 0 0 0 .75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 15 17.5H5a2.25 2.25 0 0 1-2.25-2.25v-1.5A.75.75 0 0 1 3.5 13Z" />
               </svg>
-              Export CSV{shown?.total ? ` (${formatInt(shown.total)})` : ""}
+              Export CSV{fresh?.total ? ` (${formatInt(fresh.total)})` : ""}
             </a>
           </div>
 

@@ -66,10 +66,15 @@ test("API errors show a retry that recovers", async ({ page, isMobile }) => {
   await page.getByRole("combobox", { name: /^Status/ }).selectOption("Cancelled");
   await expect(page.getByText("Couldn’t load sales orders")).toBeVisible();
   await expect(page.getByText("Could not reach the sales order service.")).toBeVisible();
+  // No stale counts from the previous (unfiltered) result while the current one failed
+  await expect(page.getByText(/of 1,200 match/)).toBeHidden();
+  await expect(page.getByRole("link", { name: /Export CSV \(/ })).toBeHidden();
 
   await page.unroute("**/api/orders?**");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(rows(page, isMobile).first()).toContainText("Cancelled");
+  await expect(page.getByText("120 of 1,200 match")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Export CSV (120)" })).toBeVisible();
 });
 
 test("phones get a sort menu", async ({ page, isMobile }) => {
