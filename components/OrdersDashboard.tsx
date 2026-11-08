@@ -307,7 +307,7 @@ export function OrdersDashboard({ seed }: { seed?: DashboardSeed }) {
         </section>
 
         <p className="text-center text-xs text-slate-500">
-          Fictional assessment data from the HSSB mock sales-orders API. Overview figures cover the whole dataset; insights and the table reflect your filters. Overdue = open order past its requested ship date (Sabah time).
+          Fictional assessment data from the HSSB mock sales-orders API. Overview figures cover the whole dataset; insights and the table reflect your filters. Overdue = open order past its requested ship date (UTC+8).
         </p>
       </main>
 

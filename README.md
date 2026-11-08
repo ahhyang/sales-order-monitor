@@ -11,7 +11,7 @@ A web app for a sales team to monitor sales orders across branches, built for th
 
 **Core requirements**
 - **Dashboard** – total orders, open/pending, completed (invoiced + delivered, with breakdown), cancelled, and total order value (RM). Status cards are clickable filters.
-- **Order listing** – order no. (SalesId), customer, branch/site, order date (Sabah time), status and amount. Server-side pagination (10/25/50/100), sortable columns, and a "Sort by" menu on phones.
+- **Order listing** – order no. (SalesId), customer, branch/site, order date (UTC+8), status and amount. Server-side pagination (10/25/50/100), sortable columns, and a "Sort by" menu on phones.
 - **Search & filters** – debounced search (order no., customer, account, PO ref, sales taker), status and branch filters. Options and counts come from the API's `/meta`.
 - **UX states** – the first page is server-rendered (no loading flash); skeletons for insights; dimmed rows plus a progress bar while refetching; empty state with "Clear filters"; error state with "Try again"; an app-level error boundary; responsive table on desktop and cards on phones.
 
@@ -87,7 +87,7 @@ HSSB mock API  https://hiring.harrisons.my/api/mock/sales-orders   (read-only)
 ### Decisions & assumptions
 
 - **Status mapping:** "Open / pending" = `Open order`; "Completed" = `Invoiced` + `Delivered`.
-- **Overdue** = `Open order` whose `ShippingDateRequested` is before today in Sabah time. The fixture data ends on 1 Oct 2026, so as of today every open order is overdue. The aging breakdown is what makes that figure useful.
+- **Overdue** = `Open order` whose `ShippingDateRequested` is before today in UTC+8 (Malaysia time). The fixture data ends on 1 Oct 2026, so as of today every open order is overdue. The aging breakdown is what makes that figure useful.
 - **Order date** = `CreatedDateTime1` (UTC) shown and filtered in `Asia/Kuching` time. **Amount** = `HAR_TotalSOAmount` (MYR). **Branch** = `InventSiteId`; the API gives no branch names, so I don't invent any.
 - **Overview cards** always show the whole dataset (that is what the API's `summary` provides). The insights header shows the filtered order count and value.
 
@@ -101,7 +101,7 @@ HSSB mock API  https://hiring.harrisons.my/api/mock/sales-orders   (read-only)
 
 ## Testing
 
-- **Unit (Vitest, 36 tests)**: query validation; the upstream client with `fetch` mocked (key handling, error mapping, timeouts, non-JSON); order logic (overdue days, the API-mirroring search, Sabah-time date boundaries, sorting, summary, aging buckets, cross-filter context); CSV quoting and formula-injection guard; rate limiter; alert throttling; date presets; and server/client URL parity.
+- **Unit (Vitest, 36 tests)**: query validation; the upstream client with `fetch` mocked (key handling, error mapping, timeouts, non-JSON); order logic (overdue days, the API-mirroring search, UTC+8 date boundaries, sorting, summary, aging buckets, cross-filter context); CSV quoting and formula-injection guard; rate limiter; alert throttling; date presets; and server/client URL parity.
 - **End-to-end (Playwright, 17 tests on desktop Chrome and a Pixel 7 profile)**: the server-rendered first load makes no client list request; search + status + branch gives 6 results; empty state and clear; detail panel open/close; overdue filter and chart cross-filtering; mocked API failure shows the error, then "Try again" recovers; mobile sort; **contract test** (dataset mode == API pass-through across 5 queries); CSV export headers and row count; 400/404/health; security headers; the key is absent from the HTML.
 - **CI** (GitHub Actions): lint → typecheck → unit → build, then Playwright E2E, on every push and pull request.
 - **Manual**: dashboard figures checked against raw API responses with curl; the layout checked at 375 px and desktop; no console errors or CSP violations; the rate limit returned 429 on the 11th export in a minute.
